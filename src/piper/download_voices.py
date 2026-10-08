@@ -6,6 +6,8 @@ import logging
 import re
 import shutil
 from pathlib import Path
+from typing import Any, Dict, Optional
+from urllib.error import HTTPError
 from urllib.request import urlopen
 
 URL_FORMAT = "https://huggingface.co/rhasspy/piper-voices/resolve/main/{lang_family}/{lang_code}/{voice_name}/{voice_quality}/{lang_code}-{voice_name}-{voice_quality}{extension}?download=true"
@@ -17,6 +19,9 @@ VOICE_PATTERN = re.compile(
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+_VOICES_DICT: Optional[Dict[str, Any]] = None
+"""Cached contents of voices.json (see get_voices)."""
 
 
 def main() -> None:
@@ -63,14 +68,44 @@ def main() -> None:
 # -----------------------------------------------------------------------------
 
 
+def get_voices() -> Dict[str, Any]:
+    """Return the contents of voices.json, downloading it once per process."""
+    global _VOICES_DICT  # pylint: disable=global-statement
+
+    if _VOICES_DICT is None:
+        _LOGGER.debug("Downloading voices.json file: '%s'", VOICES_JSON)
+        with urlopen(VOICES_JSON) as response:
+            _VOICES_DICT = json.load(response)
+
+    assert _VOICES_DICT is not None
+    return _VOICES_DICT
+
+
 def list_voices() -> None:
     """List available voices and exit."""
-    _LOGGER.debug("Downloading voices.json file: '%s'", VOICES_JSON)
-    with urlopen(VOICES_JSON) as response:
-        voices_dict = json.load(response)
-
-    for voice in sorted(voices_dict.keys()):
+    for voice in sorted(get_voices().keys()):
         print(voice)
+
+
+def resolve_alias(voice: str) -> Optional[str]:
+    """Return the current name of a voice that was renamed, or None.
+
+    Voices that have been renamed keep their old names in the "aliases" list of
+    their voices.json entry.
+    """
+    try:
+        voices_dict = get_voices()
+    except OSError:
+        # Offline, or voices.json is unreachable. The caller already has a
+        # download failure to report, so don't mask it with this one.
+        _LOGGER.debug("Could not download voices.json to resolve '%s'", voice)
+        return None
+
+    for current_name, voice_info in voices_dict.items():
+        if voice in voice_info.get("aliases", []):
+            return current_name
+
+    return None
 
 
 def download_voice(
@@ -78,11 +113,42 @@ def download_voice(
 ) -> None:
     """Download a voice model and config file to a directory."""
     voice = voice.strip()
+
+    if VOICE_PATTERN.match(voice):
+        try:
+            _download_voice(voice, download_dir, force_redownload=force_redownload)
+            return
+        except HTTPError as error:
+            if error.code != 404:
+                raise
+
+            # The voice may have been renamed since this name was published.
+            current_name = resolve_alias(voice)
+            if current_name is None:
+                raise
+    else:
+        # Not a current-style name, but it may be the old name of a voice that
+        # was renamed (like 'de-karlsson-low').
+        current_name = resolve_alias(voice)
+        if current_name is None:
+            raise ValueError(
+                f"Voice '{voice}' did not match pattern: <language>-<name>-<quality> like 'en_US-lessac-medium'",
+            )
+
+    _LOGGER.warning(
+        "Voice '%s' has been renamed to '%s', downloading that instead",
+        voice,
+        current_name,
+    )
+    _download_voice(current_name, download_dir, force_redownload=force_redownload)
+
+
+def _download_voice(
+    voice: str, download_dir: Path, force_redownload: bool = False
+) -> None:
+    """Download a voice by its current name."""
     voice_match = VOICE_PATTERN.match(voice)
-    if not voice_match:
-        raise ValueError(
-            f"Voice '{voice}' did not match pattern: <language>-<name>-<quality> like 'en_US-lessac-medium'",
-        )
+    assert voice_match is not None, voice
 
     lang_family = voice_match.group("lang_family")
     lang_code = lang_family + "_" + voice_match.group("lang_region")

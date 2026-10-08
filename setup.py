@@ -30,6 +30,17 @@ HEBREW_DATA_FILES = [
         "SOURCE",
     )
 ]
+LITHUANIAN_DATA_DIR = MODULE_DIR / "lithuanian"
+LITHUANIAN_DATA_FILES = [
+    (LITHUANIAN_DATA_DIR / f_name).relative_to(MODULE_DIR)
+    for f_name in (
+        "lt_kirciai.tsv",
+        "lt_raides.tsv",
+        "lt_kreipiniai.tsv",
+        "LICENSE",
+        "SOURCE",
+    )
+]
 # Web page and images for the HTTP server
 HTTP_DATA_FILES = [
     f.relative_to(MODULE_DIR)
@@ -118,8 +129,11 @@ setup(
             # with "numpy.dtype size changed" on import. 1.10 leaves
             # scikit-learn unpinned. Lift the cap once tltk relaxes it.
             "tltk>=1.6.8,<1.11",
-            # tltk imports pandas but does not declare it (as of 1.10).
+            # tltk imports pandas and requests but declares neither (as of
+            # 1.10). requests is pulled in by tltk/__init__.py -> tltk.corpus,
+            # which runs even though we only use tltk.nlp.
             "pandas>=2,<3",
+            "requests>=2,<3",
             "unicode-rbnf>=2.4.0,<3",
         ],
     },
@@ -141,6 +155,7 @@ setup(
                 ESPEAK_NG_DATA_FILES,
                 TASHKEEL_DATA_FILES,
                 HEBREW_DATA_FILES,
+                LITHUANIAN_DATA_FILES,
                 HTTP_DATA_FILES,
             )
         ],
